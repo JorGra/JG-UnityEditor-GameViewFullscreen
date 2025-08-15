@@ -1,7 +1,7 @@
 {
     "name": "com.jg.fullscreengameview",
     "displayName": "Fullscreen Game View",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "unity": "2022.2",
     "description": "A package that allows toggling Unity�s Game View into fullscreen mode. Tested in Unity 2022.3. Relies on Reflection and Harmony, so it might brake in the future.",
     "author": {

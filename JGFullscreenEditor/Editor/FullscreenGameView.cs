@@ -2,12 +2,12 @@
 
 using System;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using UnityEditor;
 using UnityEngine;
 
 namespace JG.Editor
 {
-
     public static class FullscreenGameView
     {
         static readonly Type GameViewType = Type.GetType("UnityEditor.GameView,UnityEditor");
@@ -33,10 +33,11 @@ namespace JG.Editor
                 return;
             }
 
-        
-        
             if (instance != null)
             {
+                WindowsTaskbar.Show();
+
+                instance.Focus();
                 instance.Close();
                 instance = null;
 
@@ -44,8 +45,9 @@ namespace JG.Editor
             }
             else
             {
-                instance = (EditorWindow)ScriptableObject.CreateInstance(GameViewType);
+                WindowsTaskbar.Hide();
 
+                instance = (EditorWindow)ScriptableObject.CreateInstance(GameViewType);
 
                 var gameViewSizesInstance = GetGameViewSizesInstance();
                 int monitorWidth = (int)(Screen.currentResolution.width / EditorGUIUtility.pixelsPerPoint);
@@ -60,9 +62,12 @@ namespace JG.Editor
                 var desktopResolution = new Vector2(monitorWidth, monitorHeight);
                 var fullscreenRect = new Rect(Vector2.zero, desktopResolution);
                 instance.ShowPopup();
+
+                instance.minSize = new Vector2(Screen.currentResolution.width, Screen.currentResolution.height);
+                instance.maxSize = instance.minSize;
+
                 instance.position = fullscreenRect;
                 instance.Focus();
-
 
                 EditorApplication.delayCall += ApplyToolbarPatches;
 
@@ -119,5 +124,30 @@ namespace JG.Editor
         }
     }
 
+    public static class WindowsTaskbar
+    {
+        private const int SW_HIDE = 0;
+        private const int SW_SHOW = 5;
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+
+        [DllImport("user32.dll")]
+        private static extern int ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        public static void Hide()
+        {
+            IntPtr taskbarHandle = FindWindow("Shell_TrayWnd", null);
+            if (taskbarHandle != IntPtr.Zero)
+                ShowWindow(taskbarHandle, SW_HIDE);
+        }
+
+        public static void Show()
+        {
+            IntPtr taskbarHandle = FindWindow("Shell_TrayWnd", null);
+            if (taskbarHandle != IntPtr.Zero)
+                ShowWindow(taskbarHandle, SW_SHOW);
+        }
+    }
 }
-    #endif
+#endif

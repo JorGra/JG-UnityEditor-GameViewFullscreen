@@ -11,9 +11,7 @@ namespace JG.Editor
     public static class FullscreenGameView
     {
         static readonly Type GameViewType = Type.GetType("UnityEditor.GameView,UnityEditor");
-        static readonly PropertyInfo ShowToolbarProperty = GameViewType.GetProperty("showToolbar", BindingFlags.Instance | BindingFlags.NonPublic);
         static readonly MethodInfo SetSizeProperty = GameViewType.GetMethod("SizeSelectionCallback", BindingFlags.Instance | BindingFlags.NonPublic);
-        static readonly object False = false;
 
         static EditorWindow instance;
 

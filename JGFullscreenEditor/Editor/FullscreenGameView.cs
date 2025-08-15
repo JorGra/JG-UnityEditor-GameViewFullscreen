@@ -2,6 +2,7 @@
 
 using System;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using UnityEditor;
 using UnityEngine;
 
@@ -16,6 +17,32 @@ namespace JG.Editor
         static readonly object False = false;
 
         static EditorWindow instance;
+
+        // Windows API imports (64-bit safe)
+        [DllImport("user32.dll")]
+        private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr", SetLastError = true)]
+        private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr", SetLastError = true)]
+        private static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
+
+        // Set Constantant
+        private const int GWL_STYLE = -16;
+        private const uint WS_POPUP = 0x80000000;
+        private const uint WS_VISIBLE = 0x10000000;
+        private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+        private const uint SWP_SHOWWINDOW = 0x0040;
+
+        // Store original window style & position
+        static IntPtr originalStyle;
+        static Rect originalPosition;
+        static IntPtr hwndInstance;
 
         // Update the shortcut to F12
         [MenuItem("Window/General/Game (Fullscreen) _F12", priority = 2)]
@@ -33,10 +60,18 @@ namespace JG.Editor
                 return;
             }
 
-        
-        
             if (instance != null)
             {
+                if (hwndInstance != IntPtr.Zero)
+                {
+                    SetWindowLongPtr(hwndInstance, GWL_STYLE, originalStyle); // restore style
+                    SetWindowPos(hwndInstance, HWND_NOTOPMOST,
+                        (int)originalPosition.x, (int)originalPosition.y,
+                        (int)originalPosition.width, (int)originalPosition.height,
+                        SWP_SHOWWINDOW);
+                }
+                hwndInstance = IntPtr.Zero;
+
                 instance.Close();
                 instance = null;
 
@@ -45,7 +80,6 @@ namespace JG.Editor
             else
             {
                 instance = (EditorWindow)ScriptableObject.CreateInstance(GameViewType);
-
 
                 var gameViewSizesInstance = GetGameViewSizesInstance();
                 int monitorWidth = (int)(Screen.currentResolution.width / EditorGUIUtility.pixelsPerPoint);
@@ -61,10 +95,23 @@ namespace JG.Editor
                 var fullscreenRect = new Rect(Vector2.zero, desktopResolution);
                 instance.ShowPopup();
                 instance.position = fullscreenRect;
+                originalPosition = instance.position;                
                 instance.Focus();
 
+                // Native fullscreen hack
+                EditorApplication.delayCall += () =>
+                {
+                    hwndInstance = FindWindow(null, instance.titleContent.text);
+                    if (hwndInstance != IntPtr.Zero)
+                    {
+                        originalStyle = GetWindowLongPtr(hwndInstance, GWL_STYLE);
+                        IntPtr newStyle = new IntPtr((originalStyle.ToInt64() & ~0x00C00000L) | WS_POPUP | WS_VISIBLE);
+                        SetWindowLongPtr(hwndInstance, GWL_STYLE, newStyle);
+                        SetWindowPos(hwndInstance, HWND_TOPMOST, 0, 0, monitorWidth, monitorHeight, SWP_SHOWWINDOW);
+                    }
 
-                EditorApplication.delayCall += ApplyToolbarPatches;
+                    ApplyToolbarPatches();
+                };
 
             }
         }
@@ -120,4 +167,4 @@ namespace JG.Editor
     }
 
 }
-    #endif
+#endif

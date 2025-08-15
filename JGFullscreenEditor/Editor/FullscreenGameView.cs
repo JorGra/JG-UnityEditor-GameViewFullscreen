@@ -19,6 +19,7 @@ namespace JG.Editor
 
         // Update the shortcut to F12
         [MenuItem("Window/General/Game (Fullscreen) _F12", priority = 2)]
+        [MenuItem("Window/General/Game (Fullscreen) _F12", priority = 2)]
         public static void Toggle()
         {
             if (!EditorApplication.isPlaying)
@@ -49,73 +50,51 @@ namespace JG.Editor
 
                 instance = (EditorWindow)ScriptableObject.CreateInstance(GameViewType);
 
-                var gameViewSizesInstance = GetGameViewSizesInstance();
-                int monitorWidth = (int)(Screen.currentResolution.width / EditorGUIUtility.pixelsPerPoint);
-                int monitorHeight = (int)(Screen.currentResolution.height / EditorGUIUtility.pixelsPerPoint);
+                // *** Get DPI scale and compute logical (unscaled) size for coordinates ***
+                float dpiScale = 1f;
 
+                dpiScale = WinDpi.GetScaleForActiveWindow();
+                int logicalW = Mathf.RoundToInt(Screen.currentResolution.width / dpiScale);
+                int logicalH = Mathf.RoundToInt(Screen.currentResolution.height / dpiScale);
+
+                // Select a size that matches the window's client area.
+                // Easiest & robust: Free Aspect (usually index 0).
                 if (SetSizeProperty != null)
                 {
-                    int sizeIndex = FindResolutionSizeIndex(monitorWidth, monitorHeight, gameViewSizesInstance);
-                    SetSizeProperty.Invoke(instance, new object[] { sizeIndex, null });
+                    try
+                    {
+                        // Use Free Aspect to ensure no cropping regardless of window client size.
+                        SetSizeProperty.Invoke(instance, new object[] { 0, null });
+                    }
+                    catch { /* ignore */ }
                 }
 
-                var desktopResolution = new Vector2(monitorWidth, monitorHeight);
-                var fullscreenRect = new Rect(Vector2.zero, desktopResolution);
-                instance.ShowPopup();
+                var fullscreenRect = new Rect(0, 0, logicalW, logicalH);
 
-                instance.minSize = new Vector2(Screen.currentResolution.width, Screen.currentResolution.height);
+                // *** Create the popup while the thread is PMv2 DPI-aware (prevents OS upscaling) ***
+                using (new WinDpi.DpiScope())
+                {
+                    instance.ShowPopup();
+                }
+
+                // *** Use logical sizes everywhere for the EditorWindow ***
+                instance.minSize = new Vector2(logicalW, logicalH);
                 instance.maxSize = instance.minSize;
-
                 instance.position = fullscreenRect;
+
                 instance.Focus();
 
                 EditorApplication.delayCall += ApplyToolbarPatches;
-
             }
         }
+
 
         private static void ApplyToolbarPatches()
         {
             // Apply the patches here, now that Unity had a frame to finalize the view
             GameViewToolbarHiderAlternative.ToggleAlternateToolbarRemoval();
         }
-        private static object GetGameViewSizesInstance()
-        {
-            var sizesType = typeof(UnityEditor.Editor).Assembly.GetType("UnityEditor.GameViewSizes");
-            var singleType = typeof(ScriptableSingleton<>).MakeGenericType(sizesType);
-            var instanceProp = singleType.GetProperty("instance");
-            return instanceProp.GetValue(null, null);
-        }
 
-        private static int FindResolutionSizeIndex(int width, int height, object gameViewSizesInstance)
-        {
-            var groupType = gameViewSizesInstance.GetType().GetMethod("GetGroup");
-            var currentGroup = groupType.Invoke(gameViewSizesInstance, new object[] { (int)GameViewType.GetMethod("GetCurrentGameViewSizeGroupType").Invoke(instance, null) });
-
-            var getBuiltinCount = currentGroup.GetType().GetMethod("GetBuiltinCount");
-            var getCustomCount = currentGroup.GetType().GetMethod("GetCustomCount");
-            var getGameViewSize = currentGroup.GetType().GetMethod("GetGameViewSize");
-
-            int totalSizes = (int)getBuiltinCount.Invoke(currentGroup, null) + (int)getCustomCount.Invoke(currentGroup, null);
-
-            for (int i = 0; i < totalSizes; i++)
-            {
-                var size = getGameViewSize.Invoke(currentGroup, new object[] { i });
-                var widthProp = size.GetType().GetProperty("width");
-                var heightProp = size.GetType().GetProperty("height");
-
-                int w = (int)widthProp.GetValue(size, null);
-                int h = (int)heightProp.GetValue(size, null);
-
-                if (w == width && h == height)
-                {
-                    return i;
-                }
-            }
-
-            Debug.LogWarning("Resolution not found. Defaulting to index 0.");
-            return 0;
-        }
 
         [MenuItem("Window/LayoutShortcuts/Default", false, 2)]
         static void DefaultLayout()
@@ -126,28 +105,27 @@ namespace JG.Editor
 
     public static class WindowsTaskbar
     {
+#if UNITY_EDITOR_WIN
         private const int SW_HIDE = 0;
         private const int SW_SHOW = 5;
 
-        [DllImport("user32.dll")]
-        private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-
-        [DllImport("user32.dll")]
-        private static extern int ShowWindow(IntPtr hWnd, int nCmdShow);
+        [DllImport("user32.dll")] private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+        [DllImport("user32.dll")] private static extern int ShowWindow(IntPtr hWnd, int nCmdShow);
 
         public static void Hide()
         {
-            IntPtr taskbarHandle = FindWindow("Shell_TrayWnd", null);
-            if (taskbarHandle != IntPtr.Zero)
-                ShowWindow(taskbarHandle, SW_HIDE);
+            var h = FindWindow("Shell_TrayWnd", null);
+            if (h != IntPtr.Zero) ShowWindow(h, SW_HIDE);
         }
-
         public static void Show()
         {
-            IntPtr taskbarHandle = FindWindow("Shell_TrayWnd", null);
-            if (taskbarHandle != IntPtr.Zero)
-                ShowWindow(taskbarHandle, SW_SHOW);
+            var h = FindWindow("Shell_TrayWnd", null);
+            if (h != IntPtr.Zero) ShowWindow(h, SW_SHOW);
         }
+#else
+        public static void Hide() {}  // no-op on macOS/Linux
+        public static void Show() {}
+#endif
     }
 }
 #endif

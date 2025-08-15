@@ -1,24 +1,33 @@
 #if UNITY_EDITOR
-
 using System;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using UnityEditor;
 using UnityEngine;
 
 namespace JG.Editor
 {
-
+    /// <summary>
+    /// Toggles a borderless, popup GameView at the current monitor resolution.
+    /// - F12 while the editor is Playing.
+    /// - Hides the Windows taskbar (no-op on macOS/Linux).
+    /// - Makes the popup PMv2 DPI-aware to avoid OS upscaling.
+    /// - Hides the GameView toolbar via Harmony patch while fullscreen is active.
+    /// </summary>
     public static class FullscreenGameView
     {
-        static readonly Type GameViewType = Type.GetType("UnityEditor.GameView,UnityEditor");
-        static readonly PropertyInfo ShowToolbarProperty = GameViewType.GetProperty("showToolbar", BindingFlags.Instance | BindingFlags.NonPublic);
-        static readonly MethodInfo SetSizeProperty = GameViewType.GetMethod("SizeSelectionCallback", BindingFlags.Instance | BindingFlags.NonPublic);
-        static readonly object False = false;
+        private const string MenuPath = "Window/General/Game (Fullscreen) _F12";
 
-        static EditorWindow instance;
+        private static readonly Type s_GameViewType =
+            Type.GetType("UnityEditor.GameView,UnityEditor");
 
-        // Update the shortcut to F12
-        [MenuItem("Window/General/Game (Fullscreen) _F12", priority = 2)]
+        // Non-public: int SizeSelectionCallback(int index, object userData)
+        private static readonly MethodInfo s_SizeSelectionCallback =
+            s_GameViewType?.GetMethod("SizeSelectionCallback", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        private static EditorWindow s_fullscreenWindow;
+
+        [MenuItem(MenuPath, priority = 2)]
         public static void Toggle()
         {
             if (!EditorApplication.isPlaying)
@@ -27,97 +36,107 @@ namespace JG.Editor
                 return;
             }
 
-            if (GameViewType == null)
+            if (s_fullscreenWindow != null)
             {
-                Debug.LogError("GameView type not found.");
-                return;
-            }
-
-        
-        
-            if (instance != null)
-            {
-                instance.Close();
-                instance = null;
-
-                EditorApplication.delayCall += ApplyToolbarPatches;
+                ExitFullscreen();
             }
             else
             {
-                instance = (EditorWindow)ScriptableObject.CreateInstance(GameViewType);
-
-
-                var gameViewSizesInstance = GetGameViewSizesInstance();
-                int monitorWidth = (int)(Screen.currentResolution.width / EditorGUIUtility.pixelsPerPoint);
-                int monitorHeight = (int)(Screen.currentResolution.height / EditorGUIUtility.pixelsPerPoint);
-
-                if (SetSizeProperty != null)
-                {
-                    int sizeIndex = FindResolutionSizeIndex(monitorWidth, monitorHeight, gameViewSizesInstance);
-                    SetSizeProperty.Invoke(instance, new object[] { sizeIndex, null });
-                }
-
-                var desktopResolution = new Vector2(monitorWidth, monitorHeight);
-                var fullscreenRect = new Rect(Vector2.zero, desktopResolution);
-                instance.ShowPopup();
-                instance.position = fullscreenRect;
-                instance.Focus();
-
-
-                EditorApplication.delayCall += ApplyToolbarPatches;
-
+                EnterFullscreen();
             }
         }
 
-        private static void ApplyToolbarPatches()
+        private static void EnterFullscreen()
         {
-            // Apply the patches here, now that Unity had a frame to finalize the view
-            GameViewToolbarHiderAlternative.ToggleAlternateToolbarRemoval();
-        }
-        private static object GetGameViewSizesInstance()
-        {
-            var sizesType = typeof(UnityEditor.Editor).Assembly.GetType("UnityEditor.GameViewSizes");
-            var singleType = typeof(ScriptableSingleton<>).MakeGenericType(sizesType);
-            var instanceProp = singleType.GetProperty("instance");
-            return instanceProp.GetValue(null, null);
-        }
-
-        private static int FindResolutionSizeIndex(int width, int height, object gameViewSizesInstance)
-        {
-            var groupType = gameViewSizesInstance.GetType().GetMethod("GetGroup");
-            var currentGroup = groupType.Invoke(gameViewSizesInstance, new object[] { (int)GameViewType.GetMethod("GetCurrentGameViewSizeGroupType").Invoke(instance, null) });
-
-            var getBuiltinCount = currentGroup.GetType().GetMethod("GetBuiltinCount");
-            var getCustomCount = currentGroup.GetType().GetMethod("GetCustomCount");
-            var getGameViewSize = currentGroup.GetType().GetMethod("GetGameViewSize");
-
-            int totalSizes = (int)getBuiltinCount.Invoke(currentGroup, null) + (int)getCustomCount.Invoke(currentGroup, null);
-
-            for (int i = 0; i < totalSizes; i++)
+            if (s_GameViewType == null)
             {
-                var size = getGameViewSize.Invoke(currentGroup, new object[] { i });
-                var widthProp = size.GetType().GetProperty("width");
-                var heightProp = size.GetType().GetProperty("height");
-
-                int w = (int)widthProp.GetValue(size, null);
-                int h = (int)heightProp.GetValue(size, null);
-
-                if (w == width && h == height)
-                {
-                    return i;
-                }
+                Debug.LogError("UnityEditor.GameView type not found.");
+                return;
             }
 
-            Debug.LogWarning("Resolution not found. Defaulting to index 0.");
-            return 0;
+            WindowsTaskbar.Hide();
+
+            // Create a new GameView window instance.
+            s_fullscreenWindow = (EditorWindow)ScriptableObject.CreateInstance(s_GameViewType);
+
+            // Determine logical size (pixels / DPI scale) for correct EditorWindow coordinates.
+            float dpiScale = WinDpi.GetScaleForActiveWindow();
+            int logicalW = Mathf.RoundToInt(Screen.currentResolution.width / dpiScale);
+            int logicalH = Mathf.RoundToInt(Screen.currentResolution.height / dpiScale);
+            var fullscreenRect = new Rect(0, 0, logicalW, logicalH);
+
+            // Force "Free Aspect" (index 0 is typically Free Aspect) so the view matches our window client area.
+            if (s_SizeSelectionCallback != null)
+            {
+                try { s_SizeSelectionCallback.Invoke(s_fullscreenWindow, new object[] { 0, null }); } catch { /* best effort */ }
+            }
+
+            // Show popup while thread is PMv2 DPI-aware to avoid blurry upscaling.
+            using (new WinDpi.DpiScope())
+            {
+                s_fullscreenWindow.ShowPopup();
+            }
+
+            // Lock the window to the exact fullscreen client size.
+            s_fullscreenWindow.minSize = new Vector2(logicalW, logicalH);
+            s_fullscreenWindow.maxSize = s_fullscreenWindow.minSize;
+            s_fullscreenWindow.position = fullscreenRect;
+            s_fullscreenWindow.Focus();
+
+            // Apply toolbar-hiding patches on the next editor tick (after Unity finalizes the view).
+            EditorApplication.delayCall += () => GameViewToolbarHider.SetHidden(true);
+        }
+
+        private static void ExitFullscreen()
+        {
+            // Remove toolbar patches on the next editor tick.
+            EditorApplication.delayCall += () => GameViewToolbarHider.SetHidden(false);
+
+            WindowsTaskbar.Show();
+
+            if (s_fullscreenWindow != null)
+            {
+                s_fullscreenWindow.Focus();
+                s_fullscreenWindow.Close();
+                s_fullscreenWindow = null;
+            }
         }
 
         [MenuItem("Window/LayoutShortcuts/Default", false, 2)]
-        static void DefaultLayout()
+        private static void ResetToDefaultLayout()
         {
             EditorApplication.ExecuteMenuItem("Window/Layouts/Default");
         }
     }
 
+    /// <summary>
+    /// Helper to hide/show the Windows taskbar while in popup fullscreen.
+    /// No-op on macOS/Linux.
+    /// </summary>
+    public static class WindowsTaskbar
+    {
+#if UNITY_EDITOR_WIN
+        private const int SW_HIDE = 0;
+        private const int SW_SHOW = 5;
+
+        [DllImport("user32.dll")] private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+        [DllImport("user32.dll")] private static extern int ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        public static void Hide()
+        {
+            var h = FindWindow("Shell_TrayWnd", null);
+            if (h != IntPtr.Zero) ShowWindow(h, SW_HIDE);
+        }
+
+        public static void Show()
+        {
+            var h = FindWindow("Shell_TrayWnd", null);
+            if (h != IntPtr.Zero) ShowWindow(h, SW_SHOW);
+        }
+#else
+        public static void Hide() { /* no-op */ }
+        public static void Show() { /* no-op */ }
+#endif
+    }
 }
-    #endif
+#endif

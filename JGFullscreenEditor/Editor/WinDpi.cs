@@ -1,10 +1,13 @@
-#if UNITY_EDITOR && UNITY_STANDALONE_WIN
+#if UNITY_EDITOR
 using System;
 using System.Runtime.InteropServices;
-using UnityEngine;
 
 namespace JG.Editor
 {
+    /// <summary>
+    /// Windows-only helpers for per-monitor DPI awareness.
+    /// On non-Windows editors, falls back to scale 1.0 and a no-op scope.
+    /// </summary>
     internal static class WinDpi
     {
 #if UNITY_EDITOR_WIN
@@ -23,28 +26,45 @@ namespace JG.Editor
             var hwnd = GetActiveWindow();
             if (hwnd != IntPtr.Zero)
             {
-                try { int dpi = GetDpiForWindow(hwnd); if (dpi > 0) return dpi / 96f; } catch { }
+                try
+                {
+                    int dpi = GetDpiForWindow(hwnd);
+                    if (dpi > 0) return dpi / 96f;
+                }
+                catch { /* best effort */ }
+
                 try
                 {
                     var mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
                     if (mon != IntPtr.Zero && GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, out var dx, out _) == 0)
                         return dx / 96f;
                 }
-                catch { }
+                catch { /* best effort */ }
             }
             return 1f;
         }
 
+        /// <summary>
+        /// Temporarily switch the calling thread to PMv2 DPI awareness.
+        /// Restores the previous DPI context on dispose.
+        /// </summary>
         public sealed class DpiScope : IDisposable
         {
             private readonly IntPtr _prev;
-            public DpiScope() { try { _prev = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); } catch { _prev = IntPtr.Zero; } }
-            public void Dispose() { try { if (_prev != IntPtr.Zero) SetThreadDpiAwarenessContext(_prev); } catch { } }
+            public DpiScope()
+            {
+                try { _prev = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
+                catch { _prev = IntPtr.Zero; }
+            }
+            public void Dispose()
+            {
+                try { if (_prev != IntPtr.Zero) SetThreadDpiAwarenessContext(_prev); } catch { }
+            }
         }
 #else
         // macOS/Linux editor: harmless defaults
         public static float GetScaleForActiveWindow() => 1f;
-        public sealed class DpiScope : IDisposable { public void Dispose() {} }
+        public sealed class DpiScope : IDisposable { public void Dispose() { } }
 #endif
     }
 }
